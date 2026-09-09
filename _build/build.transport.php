@@ -51,7 +51,8 @@ $plugin->addMany($events);
 $snippet = $modx->newObject('modSnippet');
 $snippet->set('name', 'WebPushSubscribe');
 $snippet->set('snippet', file_get_contents($packageRoot . 'core/components/webpush/elements/snippets/snippet.webpushsubscribe.php'));
-$category->addMany([$plugin, $snippet]);
+$categoryChildren = [$plugin, $snippet];
+$category->addMany($categoryChildren);
 
 $vehicle = $builder->createVehicle($category, [
     xPDOTransport::PRESERVE_KEYS => false,
@@ -99,11 +100,12 @@ foreach ($settings as $key => $value) {
 $namespace = $modx->newObject('modNamespace');
 $namespace->set('name', 'webpush');
 $namespace->set('path', '{core_path}components/webpush/');
-$builder->putVehicle($builder->createVehicle($namespace, [
+$namespaceVehicle = $builder->createVehicle($namespace, [
     xPDOTransport::PRESERVE_KEYS => true,
     xPDOTransport::UPDATE_OBJECT => true,
     xPDOTransport::UNIQUE_KEY => 'name'
-]));
+]);
+$builder->putVehicle($namespaceVehicle);
 
 if (!$builder->pack()) {
     fwrite(STDERR, "Transport package build failed.\n");
