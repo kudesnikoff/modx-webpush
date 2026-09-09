@@ -8,7 +8,7 @@ $modx->initialize('mgr');
 $modx->setLogLevel(modX::LOG_LEVEL_INFO);
 $modx->setLogTarget('ECHO');
 
-$signature = 'webpush-0.1.0-beta1';
+$signature = 'webpush-0.1.0-beta2';
 $builder = new xPDOTransport($modx, $signature, $root . '_build/');
 $category = $modx->newObject('modCategory');
 $category->set('category', 'WebPush');
@@ -41,6 +41,7 @@ $vehicle->resolve('file', ['source' => $root . 'core/components/webpush/', 'targ
 $vehicle->resolve('file', ['source' => $root . 'assets/components/webpush/', 'target' => "return MODX_ASSETS_PATH . 'components/';"]);
 $vehicle->resolve('php', ['source' => $root . '_build/resolvers/resolve.tables.php']);
 $vehicle->resolve('php', ['source' => $root . '_build/resolvers/resolve.serviceworker.php']);
+$vehicle->resolve('php', ['source' => $root . '_build/resolvers/resolve.tvs.php']);
 $builder->putVehicle($vehicle);
 
 $settings = [
@@ -51,12 +52,26 @@ $settings = [
 ];
 foreach ($settings as $key => $value) {
     $setting = $modx->newObject('modSystemSetting');
-    $setting->set('key', $key); $setting->set('value', $value); $setting->set('namespace', 'webpush'); $setting->set('area', 'webpush_main');
-    $v = $builder->createVehicle($setting, [xPDOTransport::PRESERVE_KEYS => true, xPDOTransport::UPDATE_OBJECT => false, xPDOTransport::UNIQUE_KEY => 'key']);
+    $setting->set('key', $key);
+    $setting->set('value', $value);
+    $setting->set('namespace', 'webpush');
+    $setting->set('area', 'webpush_main');
+    $v = $builder->createVehicle($setting, [
+        xPDOTransport::PRESERVE_KEYS => true,
+        xPDOTransport::UPDATE_OBJECT => false,
+        xPDOTransport::UNIQUE_KEY => 'key'
+    ]);
     $builder->putVehicle($v);
 }
+
 $namespace = $modx->newObject('modNamespace');
-$namespace->set('name', 'webpush'); $namespace->set('path', '{core_path}components/webpush/');
-$builder->putVehicle($builder->createVehicle($namespace, [xPDOTransport::PRESERVE_KEYS => true, xPDOTransport::UPDATE_OBJECT => true, xPDOTransport::UNIQUE_KEY => 'name']));
+$namespace->set('name', 'webpush');
+$namespace->set('path', '{core_path}components/webpush/');
+$builder->putVehicle($builder->createVehicle($namespace, [
+    xPDOTransport::PRESERVE_KEYS => true,
+    xPDOTransport::UPDATE_OBJECT => true,
+    xPDOTransport::UNIQUE_KEY => 'name'
+]));
+
 $builder->pack();
 echo "Built {$signature} in " . round(microtime(true) - $tstart, 2) . " sec\n";
