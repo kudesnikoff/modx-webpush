@@ -5,7 +5,10 @@ if ($object->xpdo) {
         case xPDOTransport::ACTION_INSTALL:
         case xPDOTransport::ACTION_UPGRADE:
             $prefix = $modx->getOption('table_prefix', null, 'modx_');
-            $modx->exec("CREATE TABLE IF NOT EXISTS `{$prefix}webpush_subscriptions` (
+            $subscriptions = $prefix . 'webpush_subscriptions';
+            $queue = $prefix . 'webpush_queue';
+
+            $modx->exec("CREATE TABLE IF NOT EXISTS `{$subscriptions}` (
               `id` int unsigned NOT NULL AUTO_INCREMENT,
               `endpoint` text NOT NULL,
               `endpoint_hash` char(64) NOT NULL,
@@ -19,9 +22,12 @@ if ($object->xpdo) {
               `last_success` datetime NULL,
               `created_at` datetime NOT NULL,
               `updated_at` datetime NOT NULL,
-              PRIMARY KEY (`id`), UNIQUE KEY `endpoint_hash` (`endpoint_hash`), KEY `active` (`active`)
+              PRIMARY KEY (`id`),
+              UNIQUE KEY `endpoint_hash` (`endpoint_hash`),
+              KEY `active_id` (`active`,`id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-            $modx->exec("CREATE TABLE IF NOT EXISTS `{$prefix}webpush_queue` (
+
+            $modx->exec("CREATE TABLE IF NOT EXISTS `{$queue}` (
               `id` int unsigned NOT NULL AUTO_INCREMENT,
               `resource_id` int unsigned NOT NULL,
               `kind` varchar(32) NOT NULL DEFAULT 'page',
@@ -30,13 +36,31 @@ if ($object->xpdo) {
               `url` text NOT NULL,
               `image` text NOT NULL,
               `tag` varchar(255) NOT NULL DEFAULT '',
-              `status` enum('pending','processing','sent') NOT NULL DEFAULT 'pending',
+              `status` enum('pending','processing','sent','failed') NOT NULL DEFAULT 'pending',
               `attempts` int unsigned NOT NULL DEFAULT 0,
               `last_error` text NULL,
+              `locked_at` datetime NULL,
               `created_at` datetime NOT NULL,
               `sent_at` datetime NULL,
-              PRIMARY KEY (`id`), UNIQUE KEY `resource_id` (`resource_id`), KEY `status` (`status`)
+              PRIMARY KEY (`id`),
+              UNIQUE KEY `resource_id` (`resource_id`),
+              KEY `status_attempts` (`status`,`attempts`,`id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+            // Upgrade an early beta table in-place when it already exists.
+            try {
+                $columns = $modx->query("SHOW COLUMNS FROM `{$queue}` LIKE 'locked_at'");
+                if ($columns && !$columns->fetch(PDO::FETCH_ASSOC)) {
+                    $modx->exec("ALTER TABLE `{$queue}` ADD `locked_at` datetime NULL AFTER `last_error`");
+                }
+            } catch (Throwable $e) {
+                // Fresh installs already contain the column.
+            }
+            try {
+                $modx->exec("ALTER TABLE `{$queue}` MODIFY `status` enum('pending','processing','sent','failed') NOT NULL DEFAULT 'pending'");
+            } catch (Throwable $e) {
+                // Keep installation resilient across MySQL/MariaDB variants.
+            }
             break;
     }
 }
