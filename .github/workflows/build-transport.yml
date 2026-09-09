@@ -1,0 +1,94 @@
+name: Build transport package
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: transport-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build MODX transport.zip
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: modx
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout component
+        uses: actions/checkout@v5
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: mbstring, mysqli, pdo_mysql, zip, openssl, curl
+          coverage: none
+
+      - name: Install runtime dependencies
+        working-directory: core/components/webpush
+        run: composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader
+
+      - name: Download MODX 2.8.9
+        run: |
+          set -euxo pipefail
+          curl -fL -o /tmp/modx.zip https://modx.s3.amazonaws.com/releases/2.8.9/modx-2.8.9-pl.zip
+          rm -rf /tmp/modx
+          mkdir -p /tmp/modx
+          unzip -q /tmp/modx.zip -d /tmp/modx-extract
+          cp -a /tmp/modx-extract/modx-2.8.9-pl/. /tmp/modx/
+
+      - name: Install MODX fixture
+        working-directory: /tmp/modx
+        run: |
+          php setup/cli-install.php \
+            --database_server=127.0.0.1 \
+            --database=modx \
+            --database_user=root \
+            --database_password=root \
+            --table_prefix=modx_ \
+            --http_host=localhost \
+            --cmsadmin=admin \
+            --cmspassword='BuildOnly-12345!' \
+            --cmsadminemail=build@example.invalid \
+            --language=en \
+            --context_mgr_path=/tmp/modx/manager/ \
+            --context_mgr_url=/manager/ \
+            --context_connectors_path=/tmp/modx/connectors/ \
+            --context_connectors_url=/connectors/
+
+      - name: Build package
+        env:
+          MODX_ROOT: /tmp/modx
+        run: |
+          set -euxo pipefail
+          php _build/build.transport.php
+          find _build -type f -name '*.transport.zip' -print
+          test -n "$(find _build -type f -name '*.transport.zip' -print -quit)"
+          mkdir -p dist
+          cp "$(find _build -type f -name '*.transport.zip' -print -quit)" dist/webpush-0.1.0-beta2.transport.zip
+          unzip -t dist/webpush-0.1.0-beta2.transport.zip
+
+      - name: Upload transport package
+        uses: actions/upload-artifact@v4
+        with:
+          name: webpush-0.1.0-beta2-transport
+          path: dist/webpush-0.1.0-beta2.transport.zip
+          if-no-files-found: error
+          retention-days: 14

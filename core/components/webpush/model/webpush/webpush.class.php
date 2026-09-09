@@ -5,9 +5,7 @@ use Minishlink\WebPush\WebPush as MinishlinkWebPush;
 
 class WebPush
 {
-    /** @var object */
     public $modx;
-    /** @var array */
     public $config = [];
 
     public function __construct(&$modx, array $config = [])
@@ -22,11 +20,7 @@ class WebPush
             'tablePrefix' => $this->getOption('table_prefix', null, 'modx_'),
         ], $config);
 
-        $autoloaders = [
-            $corePath . 'vendor/autoload.php',
-            dirname(dirname(dirname(dirname($corePath)))) . '/vendor/autoload.php',
-        ];
-        foreach ($autoloaders as $autoload) {
+        foreach ([$corePath . 'vendor/autoload.php', dirname(dirname(dirname(dirname($corePath)))) . '/vendor/autoload.php'] as $autoload) {
             if (is_file($autoload)) {
                 require_once $autoload;
                 break;
@@ -48,6 +42,9 @@ class WebPush
 
     public function table($name)
     {
+        if (!in_array($name, ['subscriptions', 'queue'], true)) {
+            throw new InvalidArgumentException('Unknown WebPush table.');
+        }
         return $this->config['tablePrefix'] . 'webpush_' . $name;
     }
 
@@ -56,29 +53,120 @@ class WebPush
         return trim((string)$this->getOption('webpush_vapid_public_key'));
     }
 
+    public static function validateEndpoint($endpoint)
+    {
+        $endpoint = trim((string)$endpoint);
+        if ($endpoint === '' || strlen($endpoint) > 2048 || filter_var($endpoint, FILTER_VALIDATE_URL) === false) {
+            return false;
+        }
+        $parts = parse_url($endpoint);
+        if (!is_array($parts)
+            || strtolower((string)($parts['scheme'] ?? '')) !== 'https'
+            || empty($parts['host'])
+            || isset($parts['user'])
+            || isset($parts['pass'])
+            || isset($parts['fragment'])) {
+            return false;
+        }
+
+        $host = strtolower(rtrim((string)$parts['host'], '.'));
+        $ipCandidate = trim($host, '[]');
+        if ($host === 'localhost' || substr($host, -10) === '.localhost' || substr($host, -6) === '.local') {
+            return false;
+        }
+
+        if (filter_var($ipCandidate, FILTER_VALIDATE_IP) !== false) {
+            return filter_var(
+                $ipCandidate,
+                FILTER_VALIDATE_IP,
+                FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+            ) !== false;
+        }
+
+        // Push service endpoints are public DNS names. Reject single-label hosts and
+        // numeric/alternate IP spellings that URL clients may interpret as addresses.
+        if (strpos($host, '.') === false || preg_match('/^[0-9]+$/D', $host) === 1 || preg_match('/^0x[0-9a-f]+$/Di', $host) === 1) {
+            return false;
+        }
+        return true;
+    }
+
+    public static function validateBase64Url($value, $minLength = 16, $maxLength = 255)
+    {
+        $value = (string)$value;
+        $length = strlen($value);
+        return $length >= $minLength && $length <= $maxLength && preg_match('/^[A-Za-z0-9_-]+$/D', $value) === 1;
+    }
+
+    public static function cleanText($value, $maxLength = 0)
+    {
+        $value = html_entity_decode(strip_tags((string)$value), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $value = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $value);
+        $value = preg_replace('/\s+/u', ' ', trim((string)$value));
+        if ($maxLength > 0) {
+            $value = function_exists('mb_substr') ? mb_substr($value, 0, $maxLength, 'UTF-8') : substr($value, 0, $maxLength);
+        }
+        return $value;
+    }
+
+    public function normalizeHttpUrl($value, $allowExternal = true)
+    {
+        $value = trim((string)$value);
+        if ($value === '') {
+            return '';
+        }
+        $siteUrl = rtrim((string)$this->getOption('site_url'), '/');
+        if (strpos($value, '//') === 0) {
+            $value = 'https:' . $value;
+        } elseif (filter_var($value, FILTER_VALIDATE_URL) === false) {
+            $value = $siteUrl . '/' . ltrim($value, '/');
+        }
+        if (filter_var($value, FILTER_VALIDATE_URL) === false) {
+            return '';
+        }
+        $parts = parse_url($value);
+        $scheme = strtolower((string)($parts['scheme'] ?? ''));
+        if (!in_array($scheme, ['http', 'https'], true) || empty($parts['host']) || isset($parts['user']) || isset($parts['pass'])) {
+            return '';
+        }
+        if (!$allowExternal) {
+            $site = parse_url($siteUrl);
+            if (!is_array($site)
+                || strtolower((string)($site['host'] ?? '')) !== strtolower((string)$parts['host'])
+                || strtolower((string)($site['scheme'] ?? '')) !== $scheme) {
+                return '';
+            }
+        }
+        return $value;
+    }
+
     public function subscribe(array $data)
     {
         $endpoint = trim((string)($data['endpoint'] ?? ''));
         $keys = isset($data['keys']) && is_array($data['keys']) ? $data['keys'] : [];
         $p256dh = trim((string)($keys['p256dh'] ?? ''));
         $auth = trim((string)($keys['auth'] ?? ''));
-        if ($endpoint === '' || $p256dh === '' || $auth === '') {
+        if (!self::validateEndpoint($endpoint)
+            || !self::validateBase64Url($p256dh, 32, 255)
+            || !self::validateBase64Url($auth, 16, 255)) {
             throw new InvalidArgumentException('Invalid PushSubscription payload.');
         }
-
         $contentEncoding = trim((string)($data['contentEncoding'] ?? 'aes128gcm')) ?: 'aes128gcm';
-        $userAgent = substr((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 500);
+        if (!in_array($contentEncoding, ['aes128gcm', 'aesgcm'], true)) {
+            throw new InvalidArgumentException('Unsupported content encoding.');
+        }
+
+        $userAgent = self::cleanText((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 500);
         $userId = 0;
         if (isset($this->modx->user) && is_object($this->modx->user) && method_exists($this->modx->user, 'get')) {
             $userId = (int)$this->modx->user->get('id');
         }
-
         $sql = 'INSERT INTO `' . $this->table('subscriptions') . '` '
-             . '(`endpoint`,`endpoint_hash`,`p256dh`,`auth`,`content_encoding`,`user_id`,`user_agent`,`active`,`fail_count`,`created_at`,`updated_at`) '
-             . 'VALUES (:endpoint,:endpoint_hash,:p256dh,:auth,:encoding,:user_id,:user_agent,1,0,NOW(),NOW()) '
-             . 'ON DUPLICATE KEY UPDATE `p256dh`=VALUES(`p256dh`),`auth`=VALUES(`auth`),'
-             . '`content_encoding`=VALUES(`content_encoding`),`user_id`=VALUES(`user_id`),'
-             . '`user_agent`=VALUES(`user_agent`),`active`=1,`fail_count`=0,`updated_at`=NOW()';
+            . '(`endpoint`,`endpoint_hash`,`p256dh`,`auth`,`content_encoding`,`user_id`,`user_agent`,`active`,`fail_count`,`created_at`,`updated_at`) '
+            . 'VALUES (:endpoint,:endpoint_hash,:p256dh,:auth,:encoding,:user_id,:user_agent,1,0,NOW(),NOW()) '
+            . 'ON DUPLICATE KEY UPDATE `endpoint`=VALUES(`endpoint`),`p256dh`=VALUES(`p256dh`),`auth`=VALUES(`auth`),'
+            . '`content_encoding`=VALUES(`content_encoding`),`user_id`=VALUES(`user_id`),`user_agent`=VALUES(`user_agent`),'
+            . '`active`=1,`fail_count`=0,`updated_at`=NOW()';
         $stmt = $this->modx->prepare($sql);
         return $stmt->execute([
             ':endpoint' => $endpoint,
@@ -93,8 +181,12 @@ class WebPush
 
     public function unsubscribe($endpoint)
     {
-        $stmt = $this->modx->prepare('UPDATE `' . $this->table('subscriptions') . '` SET `active`=0,`updated_at`=NOW() WHERE `endpoint`=:endpoint');
-        return $stmt->execute([':endpoint' => (string)$endpoint]);
+        $endpoint = trim((string)$endpoint);
+        if (!self::validateEndpoint($endpoint)) {
+            throw new InvalidArgumentException('Invalid endpoint.');
+        }
+        $stmt = $this->modx->prepare('UPDATE `' . $this->table('subscriptions') . '` SET `active`=0,`updated_at`=NOW() WHERE `endpoint_hash`=:hash');
+        return $stmt->execute([':hash' => hash('sha256', $endpoint)]);
     }
 
     public function enqueueResource($resource, $kind = 'page', array $override = [])
@@ -103,32 +195,31 @@ class WebPush
         if ($id <= 0) {
             return false;
         }
-        $title = trim((string)($override['title'] ?? ''));
+        $title = self::cleanText($override['title'] ?? '', 120);
         if ($title === '') {
-            $title = trim((string)$resource->get('pagetitle'));
+            $title = self::cleanText($resource->get('pagetitle'), 120);
         }
-        $body = trim((string)($override['body'] ?? ''));
-        if ($body === '') {
-            $body = trim((string)$resource->get('description'));
+        $body = self::cleanText($override['body'] ?? '');
+        foreach (['description', 'introtext', 'content'] as $field) {
+            if ($body === '') {
+                $body = self::cleanText($resource->get($field));
+            }
         }
-        if ($body === '') {
-            $body = trim((string)$resource->get('introtext'));
+        $max = max(40, min(500, (int)$this->getOption('webpush_body_length', null, 180)));
+        $body = self::cleanText($body, $max);
+        $url = $this->normalizeHttpUrl($this->modx->makeUrl($id, (string)$resource->get('context_key'), '', 'full'), false);
+        if ($url === '') {
+            return false;
         }
-        if ($body === '') {
-            $body = trim(strip_tags((string)$resource->get('content')));
-        }
-        $max = (int)$this->getOption('webpush_body_length', null, 180);
-        if ($max > 0 && function_exists('mb_substr')) {
-            $body = mb_substr($body, 0, $max);
-        }
-        $url = $this->modx->makeUrl($id, (string)$resource->get('context_key'), '', 'full');
-        $image = trim((string)($override['image'] ?? $this->resolveResourceImage($resource)));
+        $imageInput = trim((string)($override['image'] ?? ''));
+        $image = $this->normalizeHttpUrl($imageInput !== '' ? $imageInput : $this->resolveResourceImage($resource), true);
+        $kind = $kind === 'product' ? 'product' : 'page';
         $tag = 'resource-' . $id;
 
         $sql = 'INSERT INTO `' . $this->table('queue') . '` '
-             . '(`resource_id`,`kind`,`title`,`body`,`url`,`image`,`tag`,`status`,`attempts`,`created_at`) '
-             . 'VALUES (:resource_id,:kind,:title,:body,:url,:image,:tag,"pending",0,NOW()) '
-             . 'ON DUPLICATE KEY UPDATE `title`=VALUES(`title`),`body`=VALUES(`body`),`url`=VALUES(`url`),`image`=VALUES(`image`)';
+            . '(`resource_id`,`kind`,`title`,`body`,`url`,`image`,`tag`,`status`,`attempts`,`created_at`) '
+            . 'VALUES (:resource_id,:kind,:title,:body,:url,:image,:tag,"pending",0,NOW()) '
+            . 'ON DUPLICATE KEY UPDATE `resource_id`=`resource_id`';
         $stmt = $this->modx->prepare($sql);
         return $stmt->execute([
             ':resource_id' => $id,
@@ -155,10 +246,20 @@ class WebPush
         if ($image === '' && method_exists($resource, 'get')) {
             $image = trim((string)$resource->get('image'));
         }
-        if ($image !== '' && strpos($image, 'http://') !== 0 && strpos($image, 'https://') !== 0) {
-            $image = rtrim((string)$this->getOption('site_url'), '/') . '/' . ltrim($image, '/');
+        if ($image === '' && $this->resourceKind($resource) === 'product' && method_exists($resource, 'getOne')) {
+            try {
+                $data = $resource->getOne('Data');
+                if ($data && method_exists($data, 'get')) {
+                    $image = trim((string)$data->get('image'));
+                    if ($image === '') {
+                        $image = trim((string)$data->get('thumb'));
+                    }
+                }
+            } catch (Throwable $e) {
+                $image = '';
+            }
         }
-        return $image;
+        return $this->normalizeHttpUrl($image, true);
     }
 
     public function isTemplateEnabled($template)
@@ -173,20 +274,15 @@ class WebPush
 
     public function resourceKind($resource)
     {
-        $classKey = (string)$resource->get('class_key');
-        $lower = strtolower($classKey);
-        if ($lower === 'msproduct' || substr($lower, -10) === '\\msproduct') {
-            return 'product';
-        }
-        return 'page';
+        $lower = strtolower((string)$resource->get('class_key'));
+        return ($lower === 'msproduct' || substr($lower, -10) === '\\msproduct') ? 'product' : 'page';
     }
 
     public function shouldNotifyKind($kind)
     {
-        if ($kind === 'product') {
-            return (bool)$this->getOption('webpush_notify_products', null, true);
-        }
-        return (bool)$this->getOption('webpush_notify_pages', null, true);
+        return $kind === 'product'
+            ? (bool)$this->getOption('webpush_notify_products', null, true)
+            : (bool)$this->getOption('webpush_notify_pages', null, true);
     }
 
     public function processQueue($limit = 5, $batchSize = 500)
@@ -194,66 +290,107 @@ class WebPush
         if (!$this->isReady()) {
             throw new RuntimeException('WebPush is not configured or Composer dependencies are missing.');
         }
-        $limit = max(1, (int)$limit);
-        $stmt = $this->modx->prepare('SELECT * FROM `' . $this->table('queue') . '` WHERE `status`="pending" ORDER BY `id` ASC LIMIT ' . $limit);
+        $limit = max(1, min(100, (int)$limit));
+        $batchSize = max(10, min(2000, (int)$batchSize));
+        $maxAttempts = max(1, min(20, (int)$this->getOption('webpush_max_attempts', null, 5)));
+        $staleMinutes = max(5, min(1440, (int)$this->getOption('webpush_lock_timeout_minutes', null, 30)));
+
+        $this->modx->exec('UPDATE `' . $this->table('queue') . '` SET `status`="pending",`locked_at`=NULL '
+            . 'WHERE `status`="processing" AND `locked_at` IS NOT NULL '
+            . 'AND `locked_at` < DATE_SUB(NOW(), INTERVAL ' . $staleMinutes . ' MINUTE)');
+
+        $stmt = $this->modx->prepare('SELECT * FROM `' . $this->table('queue') . '` '
+            . 'WHERE `status`="pending" AND `attempts` < :max_attempts ORDER BY `id` ASC LIMIT ' . $limit);
+        $stmt->bindValue(':max_attempts', $maxAttempts, PDO::PARAM_INT);
         $stmt->execute();
         $jobs = $stmt->fetchAll(PDO::FETCH_ASSOC);
         $summary = ['jobs' => 0, 'sent' => 0, 'failed' => 0, 'expired' => 0];
+
         foreach ($jobs as $job) {
+            if (!$this->claimQueue((int)$job['id'])) {
+                continue;
+            }
             $summary['jobs']++;
-            $this->markQueue($job['id'], 'processing');
             try {
                 $result = $this->sendJob($job, $batchSize);
-                foreach (['sent', 'failed', 'expired'] as $k) {
-                    $summary[$k] += $result[$k];
+                foreach (['sent', 'failed', 'expired'] as $key) {
+                    $summary[$key] += $result[$key];
                 }
-                $this->markQueue($job['id'], 'sent', null);
+                $this->completeQueue((int)$job['id']);
             } catch (Throwable $e) {
-                $this->markQueue($job['id'], 'pending', $e->getMessage(), true);
-                $this->log('Queue job #' . $job['id'] . ' failed: ' . $e->getMessage());
+                $this->failQueue((int)$job['id'], $e->getMessage(), $maxAttempts);
+                $this->log('Queue job #' . (int)$job['id'] . ' failed: ' . $e->getMessage());
             }
         }
         return $summary;
     }
 
+    protected function claimQueue($id)
+    {
+        $stmt = $this->modx->prepare('UPDATE `' . $this->table('queue') . '` SET `status`="processing",`locked_at`=NOW() '
+            . 'WHERE `id`=:id AND `status`="pending"');
+        $stmt->execute([':id' => (int)$id]);
+        return $stmt->rowCount() === 1;
+    }
+
+    protected function completeQueue($id)
+    {
+        $stmt = $this->modx->prepare('UPDATE `' . $this->table('queue') . '` '
+            . 'SET `status`="sent",`locked_at`=NULL,`last_error`=NULL,`sent_at`=NOW() WHERE `id`=:id');
+        return $stmt->execute([':id' => (int)$id]);
+    }
+
+    protected function failQueue($id, $error, $maxAttempts)
+    {
+        $stmt = $this->modx->prepare('UPDATE `' . $this->table('queue') . '` SET '
+            . '`attempts`=`attempts`+1,`status`=IF(`attempts`+1 >= :max_attempts,"failed","pending"),'
+            . '`locked_at`=NULL,`last_error`=:error WHERE `id`=:id');
+        return $stmt->execute([
+            ':max_attempts' => (int)$maxAttempts,
+            ':error' => self::cleanText($error, 1000),
+            ':id' => (int)$id,
+        ]);
+    }
+
     protected function sendJob(array $job, $batchSize)
     {
-        $auth = [
-            'VAPID' => [
-                'subject' => trim((string)$this->getOption('webpush_vapid_subject', null, 'mailto:admin@example.com')),
-                'publicKey' => $this->publicKey(),
-                'privateKey' => trim((string)$this->getOption('webpush_vapid_private_key')),
-            ],
-        ];
+        $auth = ['VAPID' => [
+            'subject' => trim((string)$this->getOption('webpush_vapid_subject', null, 'mailto:admin@example.com')),
+            'publicKey' => $this->publicKey(),
+            'privateKey' => trim((string)$this->getOption('webpush_vapid_private_key')),
+        ]];
         $webPush = new MinishlinkWebPush($auth);
         $payload = json_encode([
             'title' => (string)$job['title'],
             'body' => (string)$job['body'],
             'url' => (string)$job['url'],
             'image' => (string)$job['image'],
-            'icon' => (string)$this->getOption('webpush_icon', null, '/favicon.ico'),
-            'badge' => (string)$this->getOption('webpush_badge', null, '/favicon.ico'),
+            'icon' => $this->normalizeHttpUrl((string)$this->getOption('webpush_icon', null, '/favicon.ico'), true),
+            'badge' => $this->normalizeHttpUrl((string)$this->getOption('webpush_badge', null, '/favicon.ico'), true),
             'tag' => (string)$job['tag'],
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+        if ($payload === false) {
+            throw new RuntimeException('Unable to encode push payload.');
+        }
 
         $stats = ['sent' => 0, 'failed' => 0, 'expired' => 0];
-        $offset = 0;
-        $batchSize = max(10, (int)$batchSize);
+        $lastId = 0;
+        $batchSize = max(10, min(2000, (int)$batchSize));
         do {
-            $sql = 'SELECT * FROM `' . $this->table('subscriptions') . '` WHERE `active`=1 ORDER BY `id` ASC LIMIT ' . $batchSize . ' OFFSET ' . $offset;
-            $stmt = $this->modx->prepare($sql);
+            $stmt = $this->modx->prepare('SELECT * FROM `' . $this->table('subscriptions') . '` '
+                . 'WHERE `active`=1 AND `id` > :last_id ORDER BY `id` ASC LIMIT ' . $batchSize);
+            $stmt->bindValue(':last_id', $lastId, PDO::PARAM_INT);
             $stmt->execute();
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             foreach ($rows as $row) {
-                $subscription = Subscription::create([
+                $lastId = max($lastId, (int)$row['id']);
+                $webPush->queueNotification(Subscription::create([
                     'endpoint' => $row['endpoint'],
                     'publicKey' => $row['p256dh'],
                     'authToken' => $row['auth'],
                     'contentEncoding' => $row['content_encoding'] ?: 'aes128gcm',
-                ]);
-                $webPush->queueNotification($subscription, $payload);
+                ]), $payload);
             }
-
             foreach ($webPush->flush() as $report) {
                 $endpoint = (string)$report->getRequest()->getUri();
                 if ($report->isSuccess()) {
@@ -270,38 +407,29 @@ class WebPush
                     }
                 }
             }
-            $offset += count($rows);
         } while (count($rows) === $batchSize);
-
         return $stats;
-    }
-
-    protected function markQueue($id, $status, $error = null, $incrementAttempts = false)
-    {
-        $sql = 'UPDATE `' . $this->table('queue') . '` SET `status`=:status,`last_error`=:error,'
-             . ($incrementAttempts ? '`attempts`=`attempts`+1,' : '')
-             . '`sent_at`=' . ($status === 'sent' ? 'NOW()' : '`sent_at`') . ' WHERE `id`=:id';
-        $stmt = $this->modx->prepare($sql);
-        return $stmt->execute([':status' => $status, ':error' => $error, ':id' => (int)$id]);
     }
 
     protected function markSubscriptionSuccess($endpoint)
     {
-        $stmt = $this->modx->prepare('UPDATE `' . $this->table('subscriptions') . '` SET `last_success`=NOW(),`fail_count`=0,`updated_at`=NOW() WHERE `endpoint`=:endpoint');
-        $stmt->execute([':endpoint' => $endpoint]);
+        $stmt = $this->modx->prepare('UPDATE `' . $this->table('subscriptions') . '` '
+            . 'SET `last_success`=NOW(),`fail_count`=0,`updated_at`=NOW() WHERE `endpoint_hash`=:hash');
+        $stmt->execute([':hash' => hash('sha256', (string)$endpoint)]);
     }
 
     protected function markSubscriptionFailure($endpoint)
     {
-        $stmt = $this->modx->prepare('UPDATE `' . $this->table('subscriptions') . '` SET `fail_count`=`fail_count`+1,`updated_at`=NOW() WHERE `endpoint`=:endpoint');
-        $stmt->execute([':endpoint' => $endpoint]);
+        $stmt = $this->modx->prepare('UPDATE `' . $this->table('subscriptions') . '` '
+            . 'SET `fail_count`=`fail_count`+1,`updated_at`=NOW() WHERE `endpoint_hash`=:hash');
+        $stmt->execute([':hash' => hash('sha256', (string)$endpoint)]);
     }
 
     protected function log($message)
     {
         if (method_exists($this->modx, 'log')) {
             $level = defined('modX::LOG_LEVEL_ERROR') ? constant('modX::LOG_LEVEL_ERROR') : 1;
-            $this->modx->log($level, '[WebPush] ' . $message);
+            $this->modx->log($level, '[WebPush] ' . self::cleanText($message, 1500));
         }
     }
 }
