@@ -41,7 +41,7 @@ $published = (bool)$resource->get('published');
 $wasPublished = !empty($_SESSION['webpush'][$key]['was_published']);
 unset($_SESSION['webpush'][$key]);
 
-// Only the first publication: new+published or unpublished -> published.
+// Only first publication: new+published or unpublished -> published.
 if (!$published || $wasPublished) {
     return;
 }
@@ -51,4 +51,27 @@ if (!$webPush->shouldNotifyKind($kind)) {
     return;
 }
 
-$webPush->enqueueResource($resource, $kind);
+$readTv = static function ($resource, $name, $default = '') {
+    if (!method_exists($resource, 'getTVValue')) {
+        return $default;
+    }
+    try {
+        $value = $resource->getTVValue($name);
+        return $value === null ? $default : (string)$value;
+    } catch (Throwable $e) {
+        return $default;
+    }
+};
+
+$enabled = trim($readTv($resource, 'webpush_enabled', '1'));
+if ($enabled === '0' || strtolower($enabled) === 'no' || strtolower($enabled) === 'false') {
+    return;
+}
+
+$override = [
+    'title' => trim($readTv($resource, 'webpush_title', '')),
+    'body' => trim($readTv($resource, 'webpush_body', '')),
+    'image' => trim($readTv($resource, 'webpush_image', '')),
+];
+
+$webPush->enqueueResource($resource, $kind, $override);
