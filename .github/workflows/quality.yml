@@ -13,6 +13,6 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-      - run: composer validate --no-check-publish
-      - run: composer install --no-interaction --prefer-dist
+      - run: composer validate --working-dir=core/components/webpush --no-check-publish
+      - run: composer install --working-dir=core/components/webpush --no-interaction --prefer-dist
       - run: find core assets _build -name '*.php' -print0 | xargs -0 -n1 php -l
