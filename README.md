@@ -6,7 +6,7 @@ No Sendsay, PushAll, OneSignal or similar marketing intermediary is required. De
 
 ## Status
 
-`0.1.0-beta1` — MVP intended for testing before production rollout.
+`0.1.0-beta2` — testing branch. Adds per-resource notification fields and security hardening.
 
 ## Requirements
 
@@ -31,6 +31,18 @@ Minishlink compatibility is selected by Composer:
 - Queues notifications instead of sending them during Manager save.
 - Cron worker sends notifications in batches and disables expired subscriptions.
 - Supports separate switches for pages and products and optional template filtering.
+- Provides per-resource TVs for enabling/disabling and overriding title, body and image.
+
+## Beta2 per-resource fields
+
+The transport package creates and assigns these TVs to existing templates:
+
+| TV | Meaning |
+|---|---|
+| `webpush_enabled` | `1` send on first publication, `0` suppress |
+| `webpush_title` | optional notification title; empty uses `pagetitle` |
+| `webpush_body` | optional notification body; empty falls back to description/introtext/content |
+| `webpush_image` | optional notification image; empty falls back to configured product/resource image |
 
 ## Install from source
 
@@ -70,7 +82,7 @@ php core/components/webpush/cli/generate-vapid.php
 | `webpush_notify_products` | `1` | Queue new miniShop products |
 | `webpush_notify_pages` | `1` | Queue ordinary MODX pages |
 | `webpush_templates` | `0` | `0`/`*` = all templates; or comma-separated template IDs |
-| `webpush_image_tv` | `image` | TV used as notification image |
+| `webpush_image_tv` | `image` | TV used as fallback notification image |
 | `webpush_body_length` | `180` | Max notification body length |
 | `webpush_jobs_per_run` | `5` | Queue jobs processed per cron run |
 | `webpush_batch_size` | `500` | Subscribers fetched per batch |
@@ -80,6 +92,19 @@ php core/components/webpush/cli/generate-vapid.php
 miniShop2 products are MODX resources (`class_key=msProduct`), so publication is covered by the same resource events. The code also recognises namespaced class keys ending with `\\msProduct`, which is intended to ease MODX 3 / MiniShop3 compatibility.
 
 The current beta does **not** yet send order/admin notifications; the uploaded legacy PushAll extra used `msOnCreateOrder`, but this project initially focuses on customer-facing notifications for new products and pages.
+
+## Security
+
+Beta2 adds several hardening measures:
+
+- inline JS configuration uses JSON hex escaping to avoid script-context XSS;
+- subscription/unsubscription requests use a session CSRF token;
+- the public connector checks same-origin requests, JSON content type and payload size;
+- raw exception details are not returned to unauthenticated clients;
+- GitHub Actions runs CodeQL for PHP and JavaScript using `security-extended` queries;
+- PHP lint/Composer validation run in the Quality workflow.
+
+CodeQL is an additional static-analysis layer, not a replacement for manual review or runtime testing on a real MODX installation.
 
 ## Security / privacy
 
