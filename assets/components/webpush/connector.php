@@ -23,7 +23,14 @@ if (!$config) {
 
 require_once $config;
 require_once MODX_CORE_PATH . 'model/modx/modx.class.php';
-$modx = new modX();
+if (class_exists('\\MODX\\Revolution\\modX')) {
+    $modx = new \MODX\Revolution\modX();
+} elseif (class_exists('modX')) {
+    $modx = new modX();
+} else {
+    http_response_code(500);
+    exit(json_encode(['success' => false, 'message' => 'Server bootstrap error']));
+}
 $modx->initialize('web');
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -74,7 +81,6 @@ if (!is_string($raw) || strlen($raw) > 32768) {
     http_response_code(413);
     exit(json_encode(['success' => false, 'message' => 'Payload too large']));
 }
-
 $input = json_decode($raw, true);
 if (!is_array($input)) {
     http_response_code(400);
@@ -92,7 +98,6 @@ if ($providedToken === '' || $sessionToken === '' || !hash_equals($sessionToken,
     exit(json_encode(['success' => false, 'message' => 'Invalid security token']));
 }
 
-// Small session-scoped rate limit. A normal browser needs only one mutation per click.
 $now = time();
 $windowStart = $now - 600;
 $history = isset($_SESSION['webpush_mutations']) && is_array($_SESSION['webpush_mutations'])
