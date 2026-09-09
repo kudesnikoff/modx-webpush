@@ -1,21 +1,35 @@
 <?php
 $tstart = microtime(true);
-$root = dirname(__DIR__) . '/';
-require_once $root . 'config.core.php';
+$packageRoot = dirname(__DIR__) . '/';
+$modxRoot = getenv('MODX_ROOT');
+$modxRoot = $modxRoot ? rtrim($modxRoot, '/\\') . '/' : $packageRoot;
+
+$configCore = $modxRoot . 'config.core.php';
+if (!is_file($configCore)) {
+    fwrite(STDERR, "MODX config.core.php not found. Set MODX_ROOT to an installed MODX root.\n");
+    exit(2);
+}
+
+require_once $configCore;
 require_once MODX_CORE_PATH . 'model/modx/modx.class.php';
-$modx = new modX();
+
+if (class_exists('\\MODX\\Revolution\\modX')) {
+    $modx = new \MODX\Revolution\modX();
+} else {
+    $modx = new modX();
+}
 $modx->initialize('mgr');
 $modx->setLogLevel(modX::LOG_LEVEL_INFO);
 $modx->setLogTarget('ECHO');
 
 $signature = 'webpush-0.1.0-beta2';
-$builder = new xPDOTransport($modx, $signature, $root . '_build/');
+$builder = new xPDOTransport($modx, $signature, $packageRoot . '_build/');
 $category = $modx->newObject('modCategory');
 $category->set('category', 'WebPush');
 
 $plugin = $modx->newObject('modPlugin');
 $plugin->set('name', 'WebPush');
-$plugin->set('plugincode', file_get_contents($root . 'core/components/webpush/elements/plugins/plugin.webpush.php'));
+$plugin->set('plugincode', file_get_contents($packageRoot . 'core/components/webpush/elements/plugins/plugin.webpush.php'));
 $events = [];
 foreach (['OnBeforeDocFormSave', 'OnDocFormSave'] as $event) {
     $e = $modx->newObject('modPluginEvent');
@@ -28,7 +42,7 @@ $plugin->addMany($events);
 
 $snippet = $modx->newObject('modSnippet');
 $snippet->set('name', 'WebPushSubscribe');
-$snippet->set('snippet', file_get_contents($root . 'core/components/webpush/elements/snippets/snippet.webpushsubscribe.php'));
+$snippet->set('snippet', file_get_contents($packageRoot . 'core/components/webpush/elements/snippets/snippet.webpushsubscribe.php'));
 $category->addMany([$plugin, $snippet]);
 
 $vehicle = $builder->createVehicle($category, [
@@ -37,11 +51,11 @@ $vehicle = $builder->createVehicle($category, [
     xPDOTransport::UNIQUE_KEY => 'category',
     xPDOTransport::RELATED_OBJECTS => true,
 ]);
-$vehicle->resolve('file', ['source' => $root . 'core/components/webpush/', 'target' => "return MODX_CORE_PATH . 'components/';"]);
-$vehicle->resolve('file', ['source' => $root . 'assets/components/webpush/', 'target' => "return MODX_ASSETS_PATH . 'components/';"]);
-$vehicle->resolve('php', ['source' => $root . '_build/resolvers/resolve.tables.php']);
-$vehicle->resolve('php', ['source' => $root . '_build/resolvers/resolve.serviceworker.php']);
-$vehicle->resolve('php', ['source' => $root . '_build/resolvers/resolve.tvs.php']);
+$vehicle->resolve('file', ['source' => $packageRoot . 'core/components/webpush/', 'target' => "return MODX_CORE_PATH . 'components/';"]);
+$vehicle->resolve('file', ['source' => $packageRoot . 'assets/components/webpush/', 'target' => "return MODX_ASSETS_PATH . 'components/';"]);
+$vehicle->resolve('php', ['source' => $packageRoot . '_build/resolvers/resolve.tables.php']);
+$vehicle->resolve('php', ['source' => $packageRoot . '_build/resolvers/resolve.serviceworker.php']);
+$vehicle->resolve('php', ['source' => $packageRoot . '_build/resolvers/resolve.tvs.php']);
 $builder->putVehicle($vehicle);
 
 $settings = [
@@ -83,5 +97,9 @@ $builder->putVehicle($builder->createVehicle($namespace, [
     xPDOTransport::UNIQUE_KEY => 'name'
 ]));
 
-$builder->pack();
+if (!$builder->pack()) {
+    fwrite(STDERR, "Transport package build failed.\n");
+    exit(1);
+}
+
 echo "Built {$signature} in " . round(microtime(true) - $tstart, 2) . " sec\n";
