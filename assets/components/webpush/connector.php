@@ -14,6 +14,7 @@ for ($i = 0; $i < 8; $i++) {
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('X-Content-Type-Options: nosniff');
+header('Referrer-Policy: same-origin');
 
 if (!$config) {
     http_response_code(500);
@@ -38,9 +39,15 @@ if (strpos($contentType, 'application/json') !== 0) {
 }
 
 $contentLength = (int)($_SERVER['CONTENT_LENGTH'] ?? 0);
-if ($contentLength > 32768) {
+if ($contentLength < 0 || $contentLength > 32768) {
     http_response_code(413);
     exit(json_encode(['success' => false, 'message' => 'Payload too large']));
+}
+
+$fetchSite = strtolower(trim((string)($_SERVER['HTTP_SEC_FETCH_SITE'] ?? '')));
+if ($fetchSite !== '' && !in_array($fetchSite, ['same-origin', 'same-site'], true)) {
+    http_response_code(403);
+    exit(json_encode(['success' => false, 'message' => 'Forbidden request context']));
 }
 
 $origin = trim((string)($_SERVER['HTTP_ORIGIN'] ?? ''));
@@ -48,12 +55,14 @@ if ($origin !== '') {
     $siteUrl = rtrim((string)$modx->getOption('site_url'), '/');
     $originParts = parse_url($origin);
     $siteParts = parse_url($siteUrl);
+    $originScheme = strtolower((string)($originParts['scheme'] ?? ''));
+    $siteScheme = strtolower((string)($siteParts['scheme'] ?? ''));
     $sameOrigin = is_array($originParts)
         && is_array($siteParts)
-        && strtolower((string)($originParts['scheme'] ?? '')) === strtolower((string)($siteParts['scheme'] ?? ''))
+        && $originScheme === $siteScheme
         && strtolower((string)($originParts['host'] ?? '')) === strtolower((string)($siteParts['host'] ?? ''))
-        && (int)($originParts['port'] ?? ($originParts['scheme'] === 'https' ? 443 : 80))
-            === (int)($siteParts['port'] ?? ($siteParts['scheme'] === 'https' ? 443 : 80));
+        && (int)($originParts['port'] ?? ($originScheme === 'https' ? 443 : 80))
+            === (int)($siteParts['port'] ?? ($siteScheme === 'https' ? 443 : 80));
     if (!$sameOrigin) {
         http_response_code(403);
         exit(json_encode(['success' => false, 'message' => 'Forbidden origin']));
@@ -82,6 +91,23 @@ if ($providedToken === '' || $sessionToken === '' || !hash_equals($sessionToken,
     http_response_code(403);
     exit(json_encode(['success' => false, 'message' => 'Invalid security token']));
 }
+
+// Small session-scoped rate limit. A normal browser needs only one mutation per click.
+$now = time();
+$windowStart = $now - 600;
+$history = isset($_SESSION['webpush_mutations']) && is_array($_SESSION['webpush_mutations'])
+    ? $_SESSION['webpush_mutations']
+    : [];
+$history = array_values(array_filter($history, static function ($timestamp) use ($windowStart) {
+    return is_int($timestamp) && $timestamp >= $windowStart;
+}));
+if (count($history) >= 30) {
+    http_response_code(429);
+    header('Retry-After: 600');
+    exit(json_encode(['success' => false, 'message' => 'Too many requests']));
+}
+$history[] = $now;
+$_SESSION['webpush_mutations'] = $history;
 
 $corePath = $modx->getOption('webpush_core_path', null, $modx->getOption('core_path') . 'components/webpush/');
 require_once $corePath . 'model/webpush/webpush.class.php';
