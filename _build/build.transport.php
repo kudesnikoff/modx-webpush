@@ -45,10 +45,20 @@ $vehicle->resolve('php', ['source' => $root . '_build/resolvers/resolve.tvs.php'
 $builder->putVehicle($vehicle);
 
 $settings = [
-    'webpush_vapid_public_key' => '', 'webpush_vapid_private_key' => '', 'webpush_vapid_subject' => 'mailto:admin@example.com',
-    'webpush_templates' => '0', 'webpush_notify_pages' => '1', 'webpush_notify_products' => '1', 'webpush_image_tv' => 'image',
-    'webpush_body_length' => '180', 'webpush_icon' => '/favicon.ico', 'webpush_badge' => '/favicon.ico',
-    'webpush_jobs_per_run' => '5', 'webpush_batch_size' => '500'
+    'webpush_vapid_public_key' => '',
+    'webpush_vapid_private_key' => '',
+    'webpush_vapid_subject' => 'mailto:admin@example.com',
+    'webpush_templates' => '0',
+    'webpush_notify_pages' => '1',
+    'webpush_notify_products' => '1',
+    'webpush_image_tv' => 'image',
+    'webpush_body_length' => '180',
+    'webpush_icon' => '/favicon.ico',
+    'webpush_badge' => '/favicon.ico',
+    'webpush_jobs_per_run' => '5',
+    'webpush_batch_size' => '500',
+    'webpush_max_attempts' => '5',
+    'webpush_lock_timeout_minutes' => '30',
 ];
 foreach ($settings as $key => $value) {
     $setting = $modx->newObject('modSystemSetting');
