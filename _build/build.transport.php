@@ -12,6 +12,14 @@ if (!is_file($configCore)) {
 
 require_once $configCore;
 require_once MODX_CORE_PATH . 'model/modx/modx.class.php';
+if (!class_exists('xPDOTransport')) {
+    $transportClass = MODX_CORE_PATH . 'xpdo/transport/xpdotransport.class.php';
+    if (!is_file($transportClass)) {
+        fwrite(STDERR, "xPDOTransport class file not found.\n");
+        exit(2);
+    }
+    require_once $transportClass;
+}
 
 if (class_exists('\\MODX\\Revolution\\modX')) {
     $modx = new \MODX\Revolution\modX();
