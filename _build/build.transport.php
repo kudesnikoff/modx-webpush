@@ -12,14 +12,6 @@ if (!is_file($configCore)) {
 
 require_once $configCore;
 require_once MODX_CORE_PATH . 'model/modx/modx.class.php';
-if (!class_exists('xPDOTransport')) {
-    $transportClass = MODX_CORE_PATH . 'xpdo/transport/xpdotransport.class.php';
-    if (!is_file($transportClass)) {
-        fwrite(STDERR, "xPDOTransport class file not found.\n");
-        exit(2);
-    }
-    require_once $transportClass;
-}
 
 if (class_exists('\\MODX\\Revolution\\modX')) {
     $modx = new \MODX\Revolution\modX();
@@ -30,8 +22,18 @@ $modx->initialize('mgr');
 $modx->setLogLevel(modX::LOG_LEVEL_INFO);
 $modx->setLogTarget('ECHO');
 
-$signature = 'webpush-0.1.0-beta2';
-$builder = new xPDOTransport($modx, $signature, $packageRoot . '_build/');
+$builderClass = MODX_CORE_PATH . 'model/modx/transport/modpackagebuilder.class.php';
+if (!is_file($builderClass)) {
+    fwrite(STDERR, "modPackageBuilder class file not found.\n");
+    exit(2);
+}
+require_once $builderClass;
+
+$builder = new modPackageBuilder($modx);
+$builder->directory = $packageRoot . '_build/';
+$builder->createPackage('webpush', '0.1.0', 'beta2');
+$signature = $builder->getSignature();
+
 $category = $modx->newObject('modCategory');
 $category->set('category', 'WebPush');
 
@@ -65,7 +67,10 @@ $vehicle->resolve('file', ['source' => $packageRoot . 'assets/components/webpush
 $vehicle->resolve('php', ['source' => $packageRoot . '_build/resolvers/resolve.tables.php']);
 $vehicle->resolve('php', ['source' => $packageRoot . '_build/resolvers/resolve.serviceworker.php']);
 $vehicle->resolve('php', ['source' => $packageRoot . '_build/resolvers/resolve.tvs.php']);
-$builder->putVehicle($vehicle);
+if (!$builder->putVehicle($vehicle)) {
+    fwrite(STDERR, "Failed to add component vehicle.\n");
+    exit(1);
+}
 
 $settings = [
     'webpush_vapid_public_key' => '',
@@ -94,7 +99,10 @@ foreach ($settings as $key => $value) {
         xPDOTransport::UPDATE_OBJECT => false,
         xPDOTransport::UNIQUE_KEY => 'key'
     ]);
-    $builder->putVehicle($v);
+    if (!$builder->putVehicle($v)) {
+        fwrite(STDERR, "Failed to add system setting {$key}.\n");
+        exit(1);
+    }
 }
 
 $namespace = $modx->newObject('modNamespace');
@@ -105,7 +113,10 @@ $namespaceVehicle = $builder->createVehicle($namespace, [
     xPDOTransport::UPDATE_OBJECT => true,
     xPDOTransport::UNIQUE_KEY => 'name'
 ]);
-$builder->putVehicle($namespaceVehicle);
+if (!$builder->putVehicle($namespaceVehicle)) {
+    fwrite(STDERR, "Failed to add namespace vehicle.\n");
+    exit(1);
+}
 
 if (!$builder->pack()) {
     fwrite(STDERR, "Transport package build failed.\n");
