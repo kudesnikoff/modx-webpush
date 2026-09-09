@@ -11,11 +11,19 @@
   }
 
   function request(action, payload) {
+    var body = payload || {};
+    body.csrfToken = cfg.csrfToken || '';
+
     return fetch(cfg.connectorUrl + '?action=' + encodeURIComponent(action), {
       method: 'POST',
       credentials: 'same-origin',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload || {})
+      cache: 'no-store',
+      redirect: 'error',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      body: JSON.stringify(body)
     }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
@@ -30,10 +38,11 @@
 
   function init() {
     button = document.getElementById(cfg.buttonId || 'webpush-toggle');
-    if (!button || !('serviceWorker' in navigator) || !('PushManager' in window) || !cfg.publicKey) {
+    if (!button || !('serviceWorker' in navigator) || !('PushManager' in window) || !cfg.publicKey || !cfg.csrfToken) {
       if (button) button.hidden = true;
       return;
     }
+
     navigator.serviceWorker.register(cfg.serviceWorkerUrl || '/webpush-sw.js').then(function (registration) {
       return registration.pushManager.getSubscription().then(function (subscription) {
         updateButton(subscription);
@@ -46,6 +55,7 @@
                 return request('unsubscribe', {endpoint: endpoint});
               }).then(function () { updateButton(null); });
             }
+
             return Notification.requestPermission().then(function (permission) {
               if (permission !== 'granted') throw new Error('Permission not granted');
               return registration.pushManager.subscribe({
