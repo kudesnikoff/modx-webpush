@@ -18,8 +18,11 @@ if (!$webPush->isTemplateEnabled($resource->get('template'))) {
     return;
 }
 
-if (!isset($_SESSION['webpush'])) {
-    $_SESSION['webpush'] = [];
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    @session_start();
+}
+if (!isset($_SESSION['webpush_publish_state']) || !is_array($_SESSION['webpush_publish_state'])) {
+    $_SESSION['webpush_publish_state'] = [];
 }
 
 $id = (int)$resource->get('id');
@@ -33,13 +36,19 @@ if ($eventName === 'OnBeforeDocFormSave') {
             $wasPublished = (bool)$old->get('published');
         }
     }
-    $_SESSION['webpush'][$key] = ['was_published' => $wasPublished];
+    $_SESSION['webpush_publish_state'][$key] = [
+        'was_published' => $wasPublished,
+        'time' => time(),
+    ];
     return;
 }
 
 $published = (bool)$resource->get('published');
-$wasPublished = !empty($_SESSION['webpush'][$key]['was_published']);
-unset($_SESSION['webpush'][$key]);
+$state = isset($_SESSION['webpush_publish_state'][$key]) && is_array($_SESSION['webpush_publish_state'][$key])
+    ? $_SESSION['webpush_publish_state'][$key]
+    : [];
+unset($_SESSION['webpush_publish_state'][$key]);
+$wasPublished = !empty($state['was_published']);
 
 // Only first publication: new+published or unpublished -> published.
 if (!$published || $wasPublished) {
@@ -51,20 +60,20 @@ if (!$webPush->shouldNotifyKind($kind)) {
     return;
 }
 
-$readTv = static function ($resource, $name, $default = '') {
-    if (!method_exists($resource, 'getTVValue')) {
+$readTv = static function ($resourceObject, $name, $default = '') {
+    if (!method_exists($resourceObject, 'getTVValue')) {
         return $default;
     }
     try {
-        $value = $resource->getTVValue($name);
+        $value = $resourceObject->getTVValue($name);
         return $value === null ? $default : (string)$value;
     } catch (Throwable $e) {
         return $default;
     }
 };
 
-$enabled = trim($readTv($resource, 'webpush_enabled', '1'));
-if ($enabled === '0' || strtolower($enabled) === 'no' || strtolower($enabled) === 'false') {
+$enabled = strtolower(trim($readTv($resource, 'webpush_enabled', '1')));
+if (in_array($enabled, ['0', 'no', 'false', 'off'], true)) {
     return;
 }
 
